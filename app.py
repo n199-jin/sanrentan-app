@@ -5,7 +5,7 @@ import time
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('sanrentan_v27.db', check_same_thread=False)
+    conn = sqlite3.connect('sanrentan_v28.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS scores 
@@ -22,8 +22,8 @@ def init_db():
 conn = init_db()
 
 def get_yaku_name(score):
-    if score == 6: return "✨ 3連単（ピタリ）"
-    if score == 4: return "🔥 3連複（順不同的中）"
+    if score == 6: return "✨ サンレンタン（ピタリ）"
+    if score == 4: return "🔥 サンレンプク（順不同的中）"
     if score == 3: return "⚡ 1-2位的中"
     if score == 2: return "✅ 2つ的中（順不同）"
     if score == 1: return "🎯 1位的中"
@@ -33,7 +33,7 @@ def get_settings():
     return pd.read_sql_query("SELECT * FROM settings WHERE id=1", conn).iloc[0]
 
 # --- UI設定 ---
-st.set_page_config(page_title="三連単システム", layout="wide")
+st.set_page_config(page_title="サンレンタンシステム", layout="wide")
 st.markdown("""
 <style>
     .main { background-color: #0E1117; }
@@ -55,7 +55,7 @@ conf = get_settings()
 options_list = [opt.strip() for opt in conf['options'].split(',') if opt.strip()]
 sync_key = f"{conf['is_open']}-{conf['current_q']}-{conf['show_ans']}-{conf['q_text']}"
 
-st.sidebar.title("🎮 三連単")
+st.sidebar.title("🎮 サンレンタン")
 mode = st.sidebar.radio("モード切替", ["参加者画面", "【投影用】メインモニター", "管理者画面"])
 
 # --- 1. 参加者画面 ---
@@ -119,7 +119,6 @@ elif mode == "管理者画面":
         if st.button("ログイン"):
             if pwd == "admin123": st.session_state.admin_logged_in = True; st.rerun()
     else:
-        # ランキング表示
         st.header("📊 総合ランキング")
         df_rank = pd.read_sql_query("SELECT name as 名前, SUM(score) as 合計 FROM scores WHERE name != '模範解答' GROUP BY name ORDER BY 合計 DESC", conn)
         st.table(df_rank.head(30))
@@ -161,7 +160,8 @@ elif mode == "管理者画面":
 
         st.divider()
         st.subheader("🚨 危険な操作")
-        if st.button("全回答データをリセット（1問目に戻る）"):
+        confirm = st.checkbox("全回答データを削除し、最初からやり直すことに同意します")
+        if st.button("全データをリセット", disabled=not confirm):
             conn.cursor().execute("DELETE FROM scores")
             conn.cursor().execute("DELETE FROM users")
             conn.cursor().execute("UPDATE settings SET current_q=1, is_open=0, show_ans=0, last_ans1='', last_ans2='', last_ans3='' WHERE id=1")
