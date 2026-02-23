@@ -5,7 +5,7 @@ import time
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('sanrentan_v24.db', check_same_thread=False)
+    conn = sqlite3.connect('sanrentan_v25.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS scores 
@@ -21,6 +21,15 @@ def init_db():
 
 conn = init_db()
 
+# --- 役判定ロジック ---
+def get_yaku_name(score):
+    if score == 6: return "✨ 3連単（ピタリ）"
+    if score == 4: return "🔥 3連複（順不同ですべて的中）"
+    if score == 3: return "⚡ 1-2位的中"
+    if score == 2: return "✅ 2つ的中（順不同）"
+    if score == 1: return "🎯 1位的中"
+    return "残念..."
+
 def get_settings():
     return pd.read_sql_query("SELECT * FROM settings WHERE id=1", conn).iloc[0]
 
@@ -34,16 +43,12 @@ st.markdown("""
     .silver { background: linear-gradient(135deg, #E0E0E0, #A0A0A0); color: black; font-size: 45px; border: 4px solid #FFF; }
     .bronze { background: linear-gradient(135deg, #CD7F32, #A0522D); color: white; font-size: 40px; border: 4px solid #FFF; }
     .option-box { text-align: center; background-color: #333; color: white; padding: 20px; border-radius: 12px; font-size: 28px; font-weight: bold; }
-    .q-title { font-size: 55px !important; text-align: center; margin-bottom: 20px; font-weight: bold; }
     .score-banner { text-align: center; background: #FF4B4B; color: white; padding: 20px; border-radius: 15px; margin: 20px 0; border: 3px solid #FFF; }
+    .yaku-label { font-size: 24px; font-weight: bold; color: #FFD700; margin-top: 10px; display: block; }
 </style>
 """, unsafe_allow_html=True)
 
-# 管理用ログイン
-if 'admin_logged_in' not in st.session_state:
-    st.session_state.admin_logged_in = False
-
-# 【重要】リロード対策：URLから名前を復元するロジック
+# URLパラメータからユーザー名を復元
 params = st.query_params
 if "user" in params:
     st.session_state.my_name = params["user"]
@@ -72,7 +77,14 @@ if mode == "参加者画面":
     # 正解発表時
     if conf['show_ans'] == 1:
         if my_answer is not None:
-            st.markdown(f"""<div class="score-banner"><p style="margin:0; font-size:20px;">{st.session_state.my_name} さんの結果</p><h1 style="margin:0; font-size:60px;">{my_answer['score']} 点</h1></div>""", unsafe_allow_html=True)
+            yaku = get_yaku_name(my_answer['score'])
+            st.markdown(f"""
+            <div class="score-banner">
+                <p style="margin:0; font-size:20px;">{st.session_state.my_name} さんの結果</p>
+                <h1 style="margin:0; font-size:60px;">{my_answer['score']} 点</h1>
+                <span class="yaku-label">{yaku}</span>
+            </div>
+            """, unsafe_allow_html=True)
             st.success(f"あなたの予想: 1位:{my_answer['g1']} / 2位:{my_answer['g2']} / 3位:{my_answer['g3']}")
         else:
             if st.session_state.my_name:
@@ -95,7 +107,7 @@ if mode == "参加者画面":
                 if st.form_submit_button("予想を送信"):
                     if u_name and "未選択" not in [g1, g2, g3] and len({g1, g2, g3}) == 3:
                         st.session_state.my_name = u_name
-                        st.query_params["user"] = u_name # URLに名前を保存
+                        st.query_params["user"] = u_name
                         c = conn.cursor()
                         c.execute("INSERT OR REPLACE INTO scores (q_id, name, g1, g2, g3, score) VALUES (?, ?, ?, ?, ?, 0)", (int(conf['current_q']), u_name, g1, g2, g3))
                         conn.commit()
@@ -103,7 +115,6 @@ if mode == "参加者画面":
                     else: st.error("入力不備があります。")
     else:
         st.info("⌛ 次の問題を準備中です...")
-        if st.session_state.my_name: st.write(f"待機中: {st.session_state.my_name} さん")
 
     time.sleep(3)
     if 'last_sync' not in st.session_state or st.session_state.last_sync != sync_key:
@@ -127,13 +138,21 @@ elif mode == "【投影用】メインモニター":
 # --- 3. 総合ランキング ---
 elif mode == "総合ランキング":
     st.title("📊 総合ランキング")
-    df = pd.read_sql_query("SELECT name as 名前, SUM(score) as 合計 FROM scores GROUP BY name ORDER BY 合計 DESC", conn)
+    # 「模範解答」という名前のユーザーを除外して集計
+    df = pd.read_sql_query("""
+        SELECT name as 名前, SUM(score) as 合計 
+        FROM scores 
+        WHERE name != '模範解答' 
+        GROUP BY name 
+        ORDER BY 合計 DESC
+    """, conn)
     st.table(df.head(20))
     time.sleep(10)
     st.rerun()
 
 # --- 4. 管理者画面 ---
 elif mode == "管理者画面":
+    if 'admin_logged_in' not in st.session_state: st.session_state.admin_logged_in = False
     if not st.session_state.admin_logged_in:
         pwd = st.text_input("パスワード", type="password")
         if st.button("ログイン"):
@@ -147,20 +166,31 @@ elif mode == "管理者画面":
         if st.button("設定を反映"):
             conn.cursor().execute("UPDATE settings SET current_q=?, q_text=?, options=?, is_open=?, show_ans=0 WHERE id=1", (new_q, new_txt, new_opts, 1 if status == "受付中" else 0))
             conn.commit(); st.rerun()
+        
         st.divider()
+        st.subheader("🎯 採点（模範解答の作成）")
         if conf['is_open'] == 0:
             cur_q = int(conf['current_q'])
+            # 管理者が「模範解答」として回答をセットできるようにする
+            st.info("出題者の回答を選んで『採点確定』を押すと、その内容が正解として全画面に反映されます。")
             df_q = pd.read_sql_query(f"SELECT name, g1, g2, g3 FROM scores WHERE q_id={cur_q}", conn)
-            target = st.selectbox("回答読込", ["--"] + list(df_q['name']))
+            target = st.selectbox("正解となるユーザー（出題者）を選択", ["-- 手動入力 --"] + list(df_q['name']))
+            
             iv = ["未選択"]*3
-            if target != "--":
+            if target != "-- 手動入力 --":
                 row = df_q[df_q['name'] == target].iloc[0]
                 iv = [row['g1'], row['g2'], row['g3']]
+            
             c1, c2, c3 = st.columns(3)
-            a1 = c1.selectbox("1位", ["未選択"] + options_list, index=(options_list.index(iv[0])+1) if iv[0] in options_list else 0)
-            a2 = c2.selectbox("2位", ["未選択"] + options_list, index=(options_list.index(iv[1])+1) if iv[1] in options_list else 0)
-            a3 = c3.selectbox("3位", ["未選択"] + options_list, index=(options_list.index(iv[2])+1) if iv[2] in options_list else 0)
+            a1 = c1.selectbox("1位正解", ["未選択"] + options_list, index=(options_list.index(iv[0])+1) if iv[0] in options_list else 0)
+            a2 = c2.selectbox("2位正解", ["未選択"] + options_list, index=(options_list.index(iv[1])+1) if iv[1] in options_list else 0)
+            a3 = c3.selectbox("3位正解", ["未選択"] + options_list, index=(options_list.index(iv[2])+1) if iv[2] in options_list else 0)
+            
             if st.button("採点確定"):
+                # 1. 模範解答ユーザーとして回答を保存（ランキングには出ない）
+                conn.cursor().execute("INSERT OR REPLACE INTO scores (q_id, name, g1, g2, g3, score) VALUES (?, '模範解答', ?, ?, ?, 0)", (cur_q, a1, a2, a3))
+                
+                # 2. 全員のスコアを計算
                 def calc(c, g):
                     if c == g: return 6
                     m = len(set(c) & set(g))
@@ -169,8 +199,11 @@ elif mode == "管理者画面":
                     if m == 2: return 2
                     if c[0] == g[0]: return 1
                     return 0
-                for _, r in df_q.iterrows():
+                
+                all_resp = pd.read_sql_query(f"SELECT name, g1, g2, g3 FROM scores WHERE q_id={cur_q}", conn)
+                for _, r in all_resp.iterrows():
                     sc = calc([a1, a2, a3], [r['g1'], r['g2'], r['g3']])
                     conn.cursor().execute("UPDATE scores SET score=? WHERE q_id=? AND name=?", (sc, cur_q, r['name']))
+                
                 conn.cursor().execute("UPDATE settings SET last_ans1=?, last_ans2=?, last_ans3=?, show_ans=1 WHERE id=1", (a1, a2, a3))
-                conn.commit(); st.success("採点完了"); st.rerun()
+                conn.commit(); st.success("採点完了！"); st.rerun()
