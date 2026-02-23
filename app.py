@@ -5,7 +5,7 @@ import time
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('sanrentan_v23.db', check_same_thread=False)
+    conn = sqlite3.connect('sanrentan_v24.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS scores 
@@ -39,9 +39,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# 管理用ログイン
 if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
-if 'my_name' not in st.session_state:
+
+# 【重要】リロード対策：URLから名前を復元するロジック
+params = st.query_params
+if "user" in params:
+    st.session_state.my_name = params["user"]
+elif 'my_name' not in st.session_state:
     st.session_state.my_name = ""
 
 conf = get_settings()
@@ -57,67 +63,48 @@ if mode == "参加者画面":
     st.title(conf['q_text'])
     st.divider()
 
-    # ユーザー名がセッションにあるか確認
     my_answer = None
     if st.session_state.my_name:
-        # 現在の問題番号(current_q)に紐づく自分の回答をDBから取得
-        query = "SELECT * FROM scores WHERE q_id = ? AND name = ?"
-        res = pd.read_sql_query(query, conn, params=(int(conf['current_q']), st.session_state.my_name))
+        res = pd.read_sql_query("SELECT * FROM scores WHERE q_id = ? AND name = ?", conn, params=(int(conf['current_q']), st.session_state.my_name))
         if not res.empty:
             my_answer = res.iloc[0]
 
-    # --- 画面表示分岐 ---
-    
-    # 【正解発表モード】
+    # 正解発表時
     if conf['show_ans'] == 1:
         if my_answer is not None:
-            st.markdown(f"""
-            <div class="score-banner">
-                <p style="margin:0; font-size:20px;">{st.session_state.my_name} さんの結果</p>
-                <h1 style="margin:0; font-size:60px;">{my_answer['score']} 点</h1>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"""<div class="score-banner"><p style="margin:0; font-size:20px;">{st.session_state.my_name} さんの結果</p><h1 style="margin:0; font-size:60px;">{my_answer['score']} 点</h1></div>""", unsafe_allow_html=True)
             st.success(f"あなたの予想: 1位:{my_answer['g1']} / 2位:{my_answer['g2']} / 3位:{my_answer['g3']}")
         else:
-            # ここが「回答していない」と出ていた部分。
-            # セッションに名前があるのに回答がない場合は、送信ミスかDB反映遅延の可能性を考慮
             if st.session_state.my_name:
-                st.warning(f"{st.session_state.my_name} さん、この問題（第{conf['current_q']}問）への回答が確認できませんでした。")
+                st.warning(f"{st.session_state.my_name} さん、この問題への回答がありません。")
             else:
                 st.info("名前を入力して参加してください。")
 
-    # 【回答受付モード】
+    # 回答受付中
     elif conf['is_open'] == 1:
         if my_answer is not None:
-            st.success(f"✅ 第{conf['current_q']}問の予想を送信済みです。発表までお待ちください。")
+            st.success(f"✅ 第{conf['current_q']}問の予想を送信済みです。")
             st.info(f"あなたの予想: 1位:{my_answer['g1']} / 2位:{my_answer['g2']} / 3位:{my_answer['g3']}")
         else:
             with st.form("vote_form"):
-                u_name = st.text_input("あなたの名前", value=st.session_state.my_name, placeholder="例：山田太郎")
-                st.write("▼ 3位まで選んでください（重複不可）")
+                u_name = st.text_input("あなたの名前", value=st.session_state.my_name)
                 c1, c2, c3 = st.columns(3)
-                g1 = c1.selectbox("1位", ["未選択"] + options_list, key="p_g1")
-                g2 = c2.selectbox("2位", ["未選択"] + options_list, key="p_g2")
-                g3 = c3.selectbox("3位", ["未選択"] + options_list, key="p_g3")
+                g1 = c1.selectbox("1位", ["未選択"] + options_list)
+                g2 = c2.selectbox("2位", ["未選択"] + options_list)
+                g3 = c3.selectbox("3位", ["未選択"] + options_list)
                 if st.form_submit_button("予想を送信"):
                     if u_name and "未選択" not in [g1, g2, g3] and len({g1, g2, g3}) == 3:
                         st.session_state.my_name = u_name
+                        st.query_params["user"] = u_name # URLに名前を保存
                         c = conn.cursor()
-                        c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (u_name,))
-                        c.execute("INSERT OR REPLACE INTO scores (q_id, name, g1, g2, g3, score) VALUES (?, ?, ?, ?, ?, 0)", 
-                                  (int(conf['current_q']), u_name, g1, g2, g3))
+                        c.execute("INSERT OR REPLACE INTO scores (q_id, name, g1, g2, g3, score) VALUES (?, ?, ?, ?, ?, 0)", (int(conf['current_q']), u_name, g1, g2, g3))
                         conn.commit()
-                        st.rerun() # 送信後即座に画面を切り替えて「送信済み」にする
-                    else:
-                        st.error("名前の入力と、重複のない3つの選択をしてください。")
-
-    # 【待機モード】（締め切り中かつ正解発表前）
+                        st.rerun()
+                    else: st.error("入力不備があります。")
     else:
-        st.info("⌛ 現在、管理者が次の問題を準備中、または回答を締め切っています。")
-        if st.session_state.my_name:
-            st.write(f"参加者： {st.session_state.my_name} さん")
+        st.info("⌛ 次の問題を準備中です...")
+        if st.session_state.my_name: st.write(f"待機中: {st.session_state.my_name} さん")
 
-    # 3秒おきに自動更新
     time.sleep(3)
     if 'last_sync' not in st.session_state or st.session_state.last_sync != sync_key:
         st.session_state.last_sync = sync_key
@@ -129,11 +116,8 @@ elif mode == "【投影用】メインモニター":
     st.divider()
     if conf['show_ans'] == 1:
         st.markdown("<h1 style='text-align: center; color: #FF4B4B; font-size: 80px;'>正解発表</h1>", unsafe_allow_html=True)
-        st.markdown(f"<div class='ans-card gold'>1位：{conf['last_ans1']}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='ans-card silver'>2位：{conf['last_ans2']}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='ans-card bronze'>3位：{conf['last_ans3']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='ans-card gold'>1位：{conf['last_ans1']}</div><div class='ans-card silver'>2位：{conf['last_ans2']}</div><div class='ans-card bronze'>3位：{conf['last_ans3']}</div>", unsafe_allow_html=True)
     else:
-        st.markdown("<h3 style='text-align:center;'>【 選択肢 】</h3>", unsafe_allow_html=True)
         cols = st.columns(len(options_list) if len(options_list) > 0 else 1)
         for i, opt in enumerate(options_list):
             cols[i].markdown(f"<div class='option-box'>{opt}</div>", unsafe_allow_html=True)
@@ -158,18 +142,12 @@ elif mode == "管理者画面":
         st.subheader("📢 進行管理")
         new_q = st.number_input("問題番号", value=int(conf['current_q']), min_value=1)
         new_txt = st.text_input("問題文", value=conf['q_text'])
-        new_opts = st.text_area("選択肢（カンマ区切り）", value=conf['options'])
+        new_opts = st.text_area("選択肢", value=conf['options'])
         status = st.radio("状態", ["締め切り", "受付中"], index=1 if conf['is_open'] == 1 else 0, horizontal=True)
-        if st.button("設定を保存して全員の画面を更新"):
-            # show_ans=0 にリセットすることで、次の問題の正解発表を隠す
-            conn.cursor().execute("UPDATE settings SET current_q=?, q_text=?, options=?, is_open=?, show_ans=0 WHERE id=1", 
-                                  (new_q, new_txt, new_opts, 1 if status == "受付中" else 0))
-            conn.commit()
-            st.success(f"第{new_q}問の設定を反映しました")
-            st.rerun()
-
+        if st.button("設定を反映"):
+            conn.cursor().execute("UPDATE settings SET current_q=?, q_text=?, options=?, is_open=?, show_ans=0 WHERE id=1", (new_q, new_txt, new_opts, 1 if status == "受付中" else 0))
+            conn.commit(); st.rerun()
         st.divider()
-        st.subheader("🎯 採点（締め切り時のみ可能）")
         if conf['is_open'] == 0:
             cur_q = int(conf['current_q'])
             df_q = pd.read_sql_query(f"SELECT name, g1, g2, g3 FROM scores WHERE q_id={cur_q}", conn)
@@ -178,13 +156,11 @@ elif mode == "管理者画面":
             if target != "--":
                 row = df_q[df_q['name'] == target].iloc[0]
                 iv = [row['g1'], row['g2'], row['g3']]
-            
             c1, c2, c3 = st.columns(3)
             a1 = c1.selectbox("1位", ["未選択"] + options_list, index=(options_list.index(iv[0])+1) if iv[0] in options_list else 0)
             a2 = c2.selectbox("2位", ["未選択"] + options_list, index=(options_list.index(iv[1])+1) if iv[1] in options_list else 0)
             a3 = c3.selectbox("3位", ["未選択"] + options_list, index=(options_list.index(iv[2])+1) if iv[2] in options_list else 0)
-            
-            if st.button("採点実行（投影画面に正解を出す）"):
+            if st.button("採点確定"):
                 def calc(c, g):
                     if c == g: return 6
                     m = len(set(c) & set(g))
@@ -197,7 +173,4 @@ elif mode == "管理者画面":
                     sc = calc([a1, a2, a3], [r['g1'], r['g2'], r['g3']])
                     conn.cursor().execute("UPDATE scores SET score=? WHERE q_id=? AND name=?", (sc, cur_q, r['name']))
                 conn.cursor().execute("UPDATE settings SET last_ans1=?, last_ans2=?, last_ans3=?, show_ans=1 WHERE id=1", (a1, a2, a3))
-                conn.commit()
-                st.success("採点が完了し、参加者の画面にも点数が表示されました。")
-        else:
-            st.info("「締め切り」にすると採点できます。")
+                conn.commit(); st.success("採点完了"); st.rerun()
