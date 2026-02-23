@@ -33,7 +33,7 @@ def get_settings():
     return pd.read_sql_query("SELECT * FROM settings WHERE id=1", conn).iloc[0]
 
 # --- UI設定 ---
-st.set_page_config(page_title="三連単システム", layout="wide")
+st.set_page_config(page_title="サンレンタンシステム", layout="wide")
 
 # CSS: 画面のリセットと背景固定
 st.markdown("""
@@ -64,7 +64,7 @@ conf = get_settings()
 options_list = [opt.strip() for opt in conf['options'].split(',') if opt.strip()]
 sync_key = f"{conf['is_open']}-{conf['current_q']}-{conf['show_ans']}-{conf['q_text']}"
 
-st.sidebar.title("🎮 三連単")
+st.sidebar.title("🎮 サンレンタン")
 mode = st.sidebar.radio("モード切替", ["参加者画面", "【投影用】メインモニター", "総合ランキング", "管理者画面"])
 
 # --- 1. 参加者画面 ---
@@ -187,3 +187,4 @@ elif mode == "管理者画面":
                     conn.cursor().execute("UPDATE scores SET score=? WHERE q_id=? AND name=?", (sc, cur_q, r['name']))
                 conn.cursor().execute("UPDATE settings SET last_ans1=?, last_ans2=?, last_ans3=?, show_ans=1 WHERE id=1", (a1, a2, a3))
                 conn.commit(); st.rerun()
+
