@@ -5,7 +5,7 @@ import time
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('sanrentan_v28.db', check_same_thread=False)
+    conn = sqlite3.connect('sanrentan_v31.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS scores 
@@ -23,7 +23,7 @@ conn = init_db()
 
 def get_yaku_name(score):
     if score == 6: return "✨ サンレンタン（ピタリ）"
-    if score == 4: return "🔥 サンレンプク（順不同的中）"
+    if score == 4: return "🔥 サンレンプク（順Different中的）"
     if score == 3: return "⚡ 1-2位的中"
     if score == 2: return "✅ 2つ的中（順不同）"
     if score == 1: return "🎯 1位的中"
@@ -36,31 +36,47 @@ def get_settings():
 st.set_page_config(page_title="サンレンタンシステム", layout="wide")
 st.markdown("""
 <style>
-    .main { background-color: #0E1117; }
     header {visibility: hidden;} footer {visibility: hidden;}
     .ans-card { text-align: center; padding: 30px; border-radius: 20px; color: white; font-weight: bold; margin: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     .gold { background: linear-gradient(135deg, #FFD700, #DAA520); color: black; font-size: 55px; border: 4px solid #FFF; }
     .silver { background: linear-gradient(135deg, #E0E0E0, #A0A0A0); color: black; font-size: 50px; border: 4px solid #FFF; }
     .bronze { background: linear-gradient(135deg, #CD7F32, #A0522D); color: white; font-size: 45px; border: 4px solid #FFF; }
     .option-box { text-align: center; background-color: #1F2937; color: white; padding: 25px; border-radius: 12px; font-size: 32px; font-weight: bold; border: 2px solid #374151; }
-    .q-title { font-size: 70px !important; text-align: center; margin-bottom: 30px; font-weight: bold; color: white; }
+    .q-title { font-size: 70px !important; text-align: center; margin-bottom: 30px; font-weight: bold; }
     .score-banner { text-align: center; background: #FF4B4B; color: white; padding: 30px; border-radius: 20px; margin: 20px 0; border: 4px solid #FFF; }
 </style>
 """, unsafe_allow_html=True)
 
+# URLパラメータとセッション状態の同期
 params = st.query_params
-st.session_state.my_name = params.get("user", st.session_state.get("my_name", ""))
+if 'my_name' not in st.session_state:
+    st.session_state.my_name = params.get("user", "")
 
 conf = get_settings()
 options_list = [opt.strip() for opt in conf['options'].split(',') if opt.strip()]
 sync_key = f"{conf['is_open']}-{conf['current_q']}-{conf['show_ans']}-{conf['q_text']}"
 
+# --- 【重要】サイドバーを最上位に配置 ---
 st.sidebar.title("🎮 サンレンタン")
 mode = st.sidebar.radio("モード切替", ["参加者画面", "【投影用】メインモニター", "管理者画面"])
 
-# --- 1. 参加者画面 ---
-if mode == "参加者画面":
-    with st.empty().container():
+# ランキング表示フラグ（管理者画面のボタンでONになる）
+show_ranking = params.get("page") == "rank"
+
+# --- メインエリア描画 ---
+
+# 1. ランキング表示（どのモードが選ばれていても、URLにrankがあれば優先表示）
+if show_ranking:
+    st.header("📊 総合ランキング")
+    df_rank = pd.read_sql_query("SELECT name as 名前, SUM(score) as 合計 FROM scores WHERE name != '模範解答' GROUP BY name ORDER BY 合計 DESC", conn)
+    st.table(df_rank.head(50))
+    if st.button("管理者画面に戻る"):
+        st.query_params.clear()
+        st.rerun()
+
+# 2. 参加者画面
+elif mode == "参加者画面":
+    with st.container():
         st.markdown(f"### 第 {conf['current_q']} 問")
         st.title(conf['q_text'])
         st.divider()
@@ -92,42 +108,43 @@ if mode == "参加者画面":
                             conn.cursor().execute("INSERT OR REPLACE INTO scores (q_id, name, g1, g2, g3, score) VALUES (?, ?, ?, ?, ?, 0)", (int(conf['current_q']), u_name, g1, g2, g3))
                             conn.commit(); st.rerun()
         else: st.info("⌛ 次の問題を準備中...")
+    
     time.sleep(3)
     if st.session_state.get('last_sync') != sync_key:
         st.session_state.last_sync = sync_key
         st.rerun()
 
-# --- 2. 【投影用】メインモニター ---
+# 3. 【投影用】メインモニター
 elif mode == "【投影用】メインモニター":
-    with st.empty().container():
-        if conf['show_ans'] == 1:
-            st.markdown(f"<h1 class='q-title'>{conf['q_text']}</h1>", unsafe_allow_html=True)
-            st.markdown("<h1 style='text-align: center; color: #FF4B4B; font-size: 90px; margin-top:-20px;'>正解</h1>", unsafe_allow_html=True)
-            st.markdown(f"<div class='ans-card gold'>1位：{conf['last_ans1']}</div><div class='ans-card silver'>2位：{conf['last_ans2']}</div><div class='ans-card bronze'>3位：{conf['last_ans3']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<h1 class='q-title'>{conf['q_text']}</h1>", unsafe_allow_html=True)
-            st.divider()
-            cols = st.columns(len(options_list) if len(options_list) > 0 else 1)
-            for i, opt in enumerate(options_list):
-                cols[i].markdown(f"<div class='option-box'>{opt}</div>", unsafe_allow_html=True)
+    if conf['show_ans'] == 1:
+        st.markdown(f"<h1 class='q-title'>{conf['q_text']}</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; color: #FF4B4B; font-size: 90px; margin-top:-20px;'>正解</h1>", unsafe_allow_html=True)
+        st.markdown(f"<div class='ans-card gold'>1位：{conf['last_ans1']}</div><div class='ans-card silver'>2位：{conf['last_ans2']}</div><div class='ans-card bronze'>3位：{conf['last_ans3']}</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<h1 class='q-title'>{conf['q_text']}</h1>", unsafe_allow_html=True)
+        st.divider()
+        cols = st.columns(len(options_list) if len(options_list) > 0 else 1)
+        for i, opt in enumerate(options_list):
+            cols[i].markdown(f"<div class='option-box'>{opt}</div>", unsafe_allow_html=True)
     time.sleep(3); st.rerun()
 
-# --- 3. 管理者画面 ---
+# 4. 管理者画面
 elif mode == "管理者画面":
     if not st.session_state.get('admin_logged_in', False):
         pwd = st.text_input("パスワード", type="password")
         if st.button("ログイン"):
             if pwd == "admin123": st.session_state.admin_logged_in = True; st.rerun()
     else:
-        st.header("📊 総合ランキング")
-        df_rank = pd.read_sql_query("SELECT name as 名前, SUM(score) as 合計 FROM scores WHERE name != '模範解答' GROUP BY name ORDER BY 合計 DESC", conn)
-        st.table(df_rank.head(30))
+        st.success("管理者ログイン中")
+        if st.button("🏆 総合ランキングを表示"):
+            st.query_params["page"] = "rank"
+            st.rerun()
         
         st.divider()
         st.subheader("📢 進行管理")
         new_q = st.number_input("問題番号", value=int(conf['current_q']), min_value=1)
         new_txt = st.text_input("問題文", value=conf['q_text'])
-        new_opts = st.text_area("選択肢", value=conf['options'])
+        new_opts = st.text_area("選択肢(カンマ区切り)", value=conf['options'])
         status = st.radio("状態", ["締め切り", "受付中"], index=1 if conf['is_open'] == 1 else 0, horizontal=True)
         if st.button("反映"):
             conn.cursor().execute("UPDATE settings SET current_q=?, q_text=?, options=?, is_open=?, show_ans=0 WHERE id=1", (new_q, new_txt, new_opts, 1 if status == "受付中" else 0))
@@ -160,11 +177,8 @@ elif mode == "管理者画面":
 
         st.divider()
         st.subheader("🚨 危険な操作")
-        confirm = st.checkbox("全回答データを削除し、最初からやり直すことに同意します")
+        confirm = st.checkbox("全回答データを削除することに同意します")
         if st.button("全データをリセット", disabled=not confirm):
-            conn.cursor().execute("DELETE FROM scores")
-            conn.cursor().execute("DELETE FROM users")
+            conn.cursor().execute("DELETE FROM scores"); conn.cursor().execute("DELETE FROM users")
             conn.cursor().execute("UPDATE settings SET current_q=1, is_open=0, show_ans=0, last_ans1='', last_ans2='', last_ans3='' WHERE id=1")
-            conn.commit()
-            st.warning("すべてのデータがリセットされました。")
-            st.rerun()
+            conn.commit(); st.rerun()
