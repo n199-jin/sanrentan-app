@@ -5,7 +5,7 @@ import time
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('sanrentan_v29.db', check_same_thread=False)
+    conn = sqlite3.connect('sanrentan_v30.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS scores 
@@ -23,7 +23,7 @@ conn = init_db()
 
 def get_yaku_name(score):
     if score == 6: return "✨ サンレンタン（ピタリ）"
-    if score == 4: return "🔥 サンレンプク（順不同的中）"
+    if score == 4: return "🔥 サンレンプク（順個人的中）"
     if score == 3: return "⚡ 1-2位的中"
     if score == 2: return "✅ 2つ的中（順不同）"
     if score == 1: return "🎯 1位的中"
@@ -48,31 +48,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# URLパラメータとセッション管理
+# URLパラメータ取得
 params = st.query_params
-st.session_state.my_name = params.get("user", st.session_state.get("my_name", ""))
+if 'my_name' not in st.session_state:
+    st.session_state.my_name = params.get("user", "")
 
 conf = get_settings()
 options_list = [opt.strip() for opt in conf['options'].split(',') if opt.strip()]
 sync_key = f"{conf['is_open']}-{conf['current_q']}-{conf['show_ans']}-{conf['q_text']}"
 
-# モード切替（ランキングはここから隠す）
+# --- サイドバー ---
 st.sidebar.title("🎮 サンレンタン")
-mode = st.sidebar.radio("モード切替", ["参加者画面", "【投影用】メインモニター", "管理者画面", "（隠し）ランキング"], label_visibility="collapsed" if "rank" in params else "visible")
+# モードのリストを固定。ランキングはここには出さない。
+mode = st.sidebar.radio("モード切替", ["参加者画面", "【投影用】メインモニター", "管理者画面"])
 
-# --- 1. （隠し）ランキング専用ページ ---
-# URLに ?page=rank があるか、サイドバーで選ばれた場合のみ表示
-if mode == "（隠し）ランキング" or params.get("page") == "rank":
+# 特殊な「ランキング表示」状態かどうかを判定
+show_ranking = params.get("page") == "rank"
+
+# --- 画面描画ロジック ---
+
+# 1. ランキング表示（管理者ボタン経由のみ）
+if show_ranking:
     st.header("📊 総合ランキング")
     df_rank = pd.read_sql_query("SELECT name as 名前, SUM(score) as 合計 FROM scores WHERE name != '模範解答' GROUP BY name ORDER BY 合計 DESC", conn)
     st.table(df_rank.head(50))
     if st.button("管理者画面に戻る"):
-        st.query_params.clear()
+        st.query_params.clear() # パラメータを消してリロード
         st.rerun()
     time.sleep(10)
     st.rerun()
 
-# --- 2. 参加者画面 ---
+# 2. 参加者画面
 elif mode == "参加者画面":
     with st.empty().container():
         st.markdown(f"### 第 {conf['current_q']} 問")
@@ -111,7 +117,7 @@ elif mode == "参加者画面":
         st.session_state.last_sync = sync_key
         st.rerun()
 
-# --- 3. 【投影用】メインモニター ---
+# 3. 【投影用】メインモニター
 elif mode == "【投影用】メインモニター":
     with st.empty().container():
         if conf['show_ans'] == 1:
@@ -126,23 +132,18 @@ elif mode == "【投影用】メインモニター":
                 cols[i].markdown(f"<div class='option-box'>{opt}</div>", unsafe_allow_html=True)
     time.sleep(3); st.rerun()
 
-# --- 4. 管理者画面 ---
+# 4. 管理者画面
 elif mode == "管理者画面":
     if not st.session_state.get('admin_logged_in', False):
         pwd = st.text_input("パスワード", type="password")
         if st.button("ログイン"):
             if pwd == "admin123": st.session_state.admin_logged_in = True; st.rerun()
     else:
-        # ランキングへのリンクを配置
-        st.success("ログイン中")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🏆 総合ランキングを表示する"):
-                st.query_params["page"] = "rank"
-                st.rerun()
-        with col2:
-            st.write("※別タブではなく現在の画面が切り替わります。")
-
+        st.success("管理者ログイン中")
+        if st.button("🏆 総合ランキングを表示（別画面）"):
+            st.query_params["page"] = "rank"
+            st.rerun()
+        
         st.divider()
         st.subheader("📢 進行管理")
         new_q = st.number_input("問題番号", value=int(conf['current_q']), min_value=1)
@@ -185,6 +186,4 @@ elif mode == "管理者画面":
             conn.cursor().execute("DELETE FROM scores")
             conn.cursor().execute("DELETE FROM users")
             conn.cursor().execute("UPDATE settings SET current_q=1, is_open=0, show_ans=0, last_ans1='', last_ans2='', last_ans3='' WHERE id=1")
-            conn.commit()
-            st.warning("すべてのデータがリセットされました。")
-            st.rerun()
+            conn.commit(); st.warning("リセット完了"); st.rerun()
