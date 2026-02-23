@@ -5,7 +5,7 @@ import time
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('sanrentan_v20.db', check_same_thread=False)
+    conn = sqlite3.connect('sanrentan_v21.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (name TEXT PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS scores 
@@ -22,13 +22,11 @@ def init_db():
 conn = init_db()
 
 def get_settings():
-    # キャッシュを回避して最新の状態を取得
     return pd.read_sql_query("SELECT * FROM settings WHERE id=1", conn).iloc[0]
 
 # --- UI設定 ---
 st.set_page_config(page_title="三連単システム", layout="wide")
 
-# CSS: 答えを巨大かつ見やすく
 st.markdown("""
 <style>
     .ans-card { text-align: center; padding: 40px; border-radius: 20px; color: white; font-weight: bold; margin: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
@@ -37,18 +35,18 @@ st.markdown("""
     .bronze { background: linear-gradient(135deg, #CD7F32, #A0522D); color: white; font-size: 50px; border: 5px solid #FFF; }
     .option-box { text-align: center; background-color: #333; color: white; padding: 25px; border-radius: 12px; font-size: 32px; font-weight: bold; border: 1px solid #555; }
     .q-title { font-size: 80px !important; text-align: center; margin-bottom: 30px; font-weight: bold; color: #FFF; text-shadow: 2px 2px 4px #000; }
+    .score-display { text-align: center; background: #222; padding: 20px; border-radius: 15px; border: 2px solid #FF4B4B; margin-top: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
-# 管理用ログイン状態
 if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
+# 自分の名前を保持するセッション状態
+if 'my_name' not in st.session_state:
+    st.session_state.my_name = ""
 
-# 現在のDB設定を取得
 conf = get_settings()
 options_list = [opt.strip() for opt in conf['options'].split(',') if opt.strip()]
-
-# 自動更新用のキー（状態が変わったら rerun するための識別子）
 sync_key = f"{conf['is_open']}-{conf['current_q']}-{conf['show_ans']}-{conf['q_text']}"
 
 st.sidebar.title("🎮 メニュー")
@@ -60,19 +58,36 @@ if mode == "参加者画面":
     st.markdown(f"## {conf['q_text']}")
     st.divider()
 
+    # --- 自分の点数表示エリア ---
+    if st.session_state.my_name:
+        # DBから現在の問題の点数を取得
+        res = pd.read_sql_query(f"SELECT score FROM scores WHERE q_id={conf['current_q']} AND name='{st.session_state.my_name}'", conn)
+        
+        if not res.empty:
+            current_score = res.iloc[0]['score']
+            if conf['show_ans'] == 1:
+                st.markdown(f"""
+                <div class="score-display">
+                    <p style="margin:0; font-size:18px;">{st.session_state.my_name} さんの今回の得点</p>
+                    <h2 style="margin:0; font-size:48px; color:#FF4B4B;">{current_score} 点</h2>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info(f"💡 {st.session_state.my_name} さんとしてログイン中（採点後に点数が表示されます）")
+
     if conf['is_open'] == 1:
         st.success("🟢 回答受付中")
-        # フォームを使用
         with st.form("vote_form"):
-            name = st.text_input("名前（必須）")
+            # 前回入力した名前を初期値にセット
+            name = st.text_input("名前（必須）", value=st.session_state.my_name)
             c1, c2, c3 = st.columns(3)
             g1 = c1.selectbox("1位", ["未選択"] + options_list)
             g2 = c2.selectbox("2位", ["未選択"] + options_list)
             g3 = c3.selectbox("3位", ["未選択"] + options_list)
             
-            submit = st.form_submit_button("予想を送信")
-            if submit:
+            if st.form_submit_button("予想を送信"):
                 if name and "未選択" not in [g1, g2, g3] and len({g1, g2, g3}) == 3:
+                    st.session_state.my_name = name # 名前を保存
                     c = conn.cursor()
                     c.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (name,))
                     c.execute("INSERT OR REPLACE INTO scores (q_id, name, g1, g2, g3, score) VALUES (?, ?, ?, ?, ?, 0)", 
@@ -80,27 +95,25 @@ if mode == "参加者画面":
                     conn.commit()
                     st.toast("送信が完了しました！")
                 else:
-                    st.error("入力に不備があります（重複不可）")
+                    st.error("入力不備があります")
     else:
-        st.error("🔴 現在、回答は締め切られています。次の問題までお待ちください。")
+        st.error("🔴 現在、回答は締め切られています。")
 
-    # 参加者画面の自動更新ロジック（3秒おき）
+    # 自動更新ロジック
     time.sleep(3)
-    if 'last_sync_participant' not in st.session_state or st.session_state.last_sync_participant != sync_key:
-        st.session_state.last_sync_participant = sync_key
+    if 'last_sync_p' not in st.session_state or st.session_state.last_sync_p != sync_key:
+        st.session_state.last_sync_p = sync_key
         st.rerun()
 
 # --- 2. 【投影用】メインモニター ---
 elif mode == "【投影用】メインモニター":
     if conf['show_ans'] == 1:
-        # 正解発表時：問題文と答えのみ
         st.markdown(f"<h1 class='q-title'>{conf['q_text']}</h1>", unsafe_allow_html=True)
         st.markdown("<h1 style='text-align: center; color: #FF4B4B; font-size: 90px; margin-bottom: 20px;'>正解発表</h1>", unsafe_allow_html=True)
         st.markdown(f"<div class='ans-card gold'>1位：{conf['last_ans1']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='ans-card silver'>2位：{conf['last_ans2']}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='ans-card bronze'>3位：{conf['last_ans3']}</div>", unsafe_allow_html=True)
     else:
-        # 出題中：問題文と選択肢
         st.markdown(f"<p style='text-align:center; font-size:40px; color:gray;'>第 {conf['current_q']} 問</p>", unsafe_allow_html=True)
         st.markdown(f"<h1 class='q-title'>{conf['q_text']}</h1>", unsafe_allow_html=True)
         st.divider()
@@ -132,20 +145,19 @@ elif mode == "管理者画面":
         new_txt = st.text_input("問題文", value=conf['q_text'])
         new_opts = st.text_area("選択肢（カンマ区切り）", value=conf['options'])
         status = st.radio("受付状態", ["締め切り", "受付中"], index=1 if conf['is_open'] == 1 else 0, horizontal=True)
-        if st.button("設定を反映（全員の画面が更新されます）"):
+        if st.button("設定を反映"):
             conn.cursor().execute("UPDATE settings SET current_q=?, q_text=?, options=?, is_open=?, show_ans=0 WHERE id=1", 
                                   (new_q, new_txt, new_opts, 1 if status == "受付中" else 0))
-            conn.commit(); st.success("設定を更新しました！"); time.sleep(1); st.rerun()
+            conn.commit(); st.success("設定を更新しました！"); st.rerun()
 
         st.divider()
         st.subheader("🎯 採点")
         if conf['is_open'] == 0:
             cur_q = int(conf['current_q'])
             df_q = pd.read_sql_query(f"SELECT name, g1, g2, g3 FROM scores WHERE q_id={cur_q}", conn)
-            target = st.selectbox("出題者の回答を読み込む", ["-- 手動選択 --"] + list(df_q['name']))
-            
+            target = st.selectbox("出題者の回答読込", ["--"] + list(df_q['name']))
             iv = ["未選択"] * 3
-            if target != "-- 手動選択 --":
+            if target != "--":
                 row = df_q[df_q['name'] == target].iloc[0]
                 iv = [row['g1'], row['g2'], row['g3']]
             
@@ -154,22 +166,18 @@ elif mode == "管理者画面":
             a2 = c2.selectbox("2位正解", ["未選択"] + options_list, index=(options_list.index(iv[1])+1) if iv[1] in options_list else 0)
             a3 = c3.selectbox("3位正解", ["未選択"] + options_list, index=(options_list.index(iv[2])+1) if iv[2] in options_list else 0)
             
-            if st.button("採点実行（投影画面に発表）"):
-                if "未選択" not in [a1, a2, a3]:
-                    def calc(c, g):
-                        if c == g: return 6
-                        m = len(set(c) & set(g))
-                        if m == 3: return 4
-                        if c[0] == g[0] and c[1] == g[1]: return 3
-                        if m == 2: return 2
-                        if c[0] == g[0]: return 1
-                        return 0
-                    
-                    for _, r in df_q.iterrows():
-                        sc = calc([a1, a2, a3], [r['g1'], r['g2'], r['g3']])
-                        conn.cursor().execute("UPDATE scores SET score=? WHERE q_id=? AND name=?", (sc, cur_q, r['name']))
-                    conn.cursor().execute("UPDATE settings SET last_ans1=?, last_ans2=?, last_ans3=?, show_ans=1 WHERE id=1", (a1, a2, a3))
-                    conn.commit(); st.success("採点が完了しました！")
-                else: st.error("正解をすべて選択してください")
-        else:
-            st.info("「締め切り」状態にすると採点パネルが出ます。")
+            if st.button("採点実行（投影＆各参加者の画面に反映）"):
+                def calc(c, g):
+                    if c == g: return 6
+                    m = len(set(c) & set(g))
+                    if m == 3: return 4
+                    if c[0] == g[0] and c[1] == g[1]: return 3
+                    if m == 2: return 2
+                    if c[0] == g[0]: return 1
+                    return 0
+                for _, r in df_q.iterrows():
+                    sc = calc([a1, a2, a3], [r['g1'], r['g2'], r['g3']])
+                    conn.cursor().execute("UPDATE scores SET score=? WHERE q_id=? AND name=?", (sc, cur_q, r['name']))
+                conn.cursor().execute("UPDATE settings SET last_ans1=?, last_ans2=?, last_ans3=?, show_ans=1 WHERE id=1", (a1, a2, a3))
+                conn.commit(); st.success("採点完了！参加者の画面にも反映されました。")
+        else: st.info("締め切り状態にすると採点できます。")
