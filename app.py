@@ -22,8 +22,8 @@ def init_db():
 conn = init_db()
 
 def get_yaku_name(score):
-    if score == 6: return "✨ サンレンタン（ピタリ）"
-    if score == 4: return "🔥 サンレンプク（順不同的中）"
+    if score == 6: return "✨ 3連単（ピタリ）"
+    if score == 4: return "🔥 3連複（順不同的中）"
     if score == 3: return "⚡ 1-2位的中"
     if score == 2: return "✅ 2つ的中（順不同）"
     if score == 1: return "🎯 1位的中"
@@ -168,3 +168,4 @@ elif mode == "管理者画面":
             conn.commit()
             st.warning("すべてのデータがリセットされました。")
             st.rerun()
+
